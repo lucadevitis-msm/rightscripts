@@ -1,0 +1,130 @@
+#!/bin/bash -e
+# Have a look at RightScripts Metadata Comments documentation:
+# http://docs.rightscale.com/cm/dashboard/design/rightscripts/rightscripts_metadata_comments.html
+# ---
+# RightScript Name: msm.run.script.from.repo
+# Description: >
+#   Gets a generic file from a repo and runs it
+# Inputs:
+#   MSM_GH_HOST:
+#     Input Type: single
+#     Category: Github
+#     Description: Fully Qualified Host Name of GitHub user content instance
+#     Required: false
+#     Advanced: true
+#     Default: text:raw.githubusercontent.com
+#   MSM_GH_REPO:
+#     Input Type: single
+#     Category: Github
+#     Description: >
+#       GitHub repository in the form `user_name/repo_name` or
+#       `organization_name/repo_name`
+#     Required: true
+#     Advanced: false
+#   MSM_GH_REPO_REF:
+#     Input Type: single
+#     Category: Github
+#     Description: >
+#       GitHub repository ref, usually tag or branch name.
+#     Required: false
+#     Advanced: true
+#     Default: text:master
+#   MSM_GH_REPO_FILE:
+#     Input Type: single
+#     Category: Github
+#     Description: Path to the script inside the provided GitHub repo
+#     Required: true
+#     Advanced: false
+#   MSM_SCRIPT_ARGS:
+#     Input Type: array
+#     Category: Runtime
+#     Description: Script's arguments list
+#     Required: false
+#     Advanced: false
+#   MSM_SCRIPT_INTERPRETER:
+#     Input Type: single
+#     Category: Runtime
+#     Description: Script's interpreter or runner
+#     Required: false
+#     Advanced: true
+#     Default: text:bash
+#   MSM_SCRIPT_USER:
+#     Input Type: single
+#     Category: Runtime
+#     Description: User name to run the script as
+#     Required: false
+#     Advanced: true
+#     Default: text:nobdy
+#   MSM_SCRIPT_GROUP:
+#     Input Type: single
+#     Category: Runtime
+#     Description: Group name to run the script as
+#     Required: false
+#     Advanced: true
+#     Default: text:nobody
+# ...
+
+# Strict file permission setting
+umask 0007 && umask -p
+
+MSM_WD="$(mktemp --directory)"
+
+# Clean up function to run when script exits
+function at_exit {
+    popd >/dev/null || true
+    echo "Cleaning up \`$MSM_WD\' ..."
+    [ -d "$MSM_WD" ] && rm --force --recursive "$MSM_WD"
+}
+trap at_exit EXIT
+
+# Convenience error handling function
+function die { echo "$2" 1>&2 ; return $1 ; }
+
+# Inputs checking
+for VAR in MSM_GH_HOST \
+           MSM_GH_REPO \
+           MSM_GH_REPO_REF \
+           MSM_GH_REPO_FILE \
+           MSM_SCRIPT_INTERPRETER \
+           MSM_SCRIPT_USER \
+           MSM_SCRIPT_GROUP ; do
+    [ -z "${!VAR}" ] && die 255 "Empty INPUT \`${VAR}\'"
+done
+
+# Raise an error if can't find user or group
+getent passwd "$MSM_SCRIPT_USER" >/dev/null \
+    || die $? "Could not find user \`$MSM_SCRIPT_USER\'"
+getent group "$MSM_SCRIPT_GROUP" >/dev/null \
+    || die $? "Could not find group \`$MSM_SCRIPT_GROUP\'"
+
+# Raise an error if GitHub host is unknown
+case "$MSM_GH_HOST" in
+    raw.githubusercontent.com)
+        # FIXME: that is lucadevitis-msm token
+        MSM_GH_TOKEN="APyj4mu2GVQQsUZgTzZFw0rVeC8QGNsNks5W-OjswA%3D%3D"
+    ;;
+#
+#   Let's get ready for Github enterprise and transition period.
+#
+#   moneysupermarket.githubusercontent.url)
+#       MSM_GH_TOKEN="brand_new_token_value"
+#   ;;
+#
+    *) die 254 "Unknown MSM_GH_HOST: \`${MSM_GH_HOST}\'" ;;
+esac
+
+# Raise an error if can't find the interpreter/runner
+MSM_RUN="$(which -- "${MSM_SCRIPT_INTERPRETER:-bash}")"
+
+# Preparing curl arguments
+MSM_GH_URL="https://${MSM_GH_HOST}/${MSM_GH_REPO}/${MSM_GH_REPO_REF}/${MSM_GH_REPO_FILE}?token=${MSM_GH_TOKEN}"
+MSM_SCRIPT="$(basename -- "$MSM_GH_REPO_FILE")"
+curl --fail --output "${MSM_WD}/$MSM_SCRIPT" -- "$MSM_GH_URL"
+
+# Raise an error if can't prepare working directory or cd into that
+chown --verbose --recursive "${MSM_SCRIPT_USER}:${MSM_SCRIPT_GROUP}" "$MSM_WD"
+pushd >/dev/null "$MSM_WD"
+
+# Run the script
+sudo -u "${MSM_SCRIPT_USER}" -g "${MSM_SCRIPT_GROUP}" \
+    "$MSM_RUN" "$MSM_SCRIPT" "${MSM_SCRIPT_ARGS[@]}"

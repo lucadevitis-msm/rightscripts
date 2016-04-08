@@ -1,0 +1,63 @@
+#!/bin/bash
+
+# Read script info from a configuration file and then call
+# msm-run-script-from-repo rightscript to run it on the host.
+
+function join { local IFS="$1" ; echo -n "${*:2:$#}" ; }
+function array { echo -n "array:" ; join , "$@" ; }
+
+# First read global defaults
+source jenkins-rightscripts.d/defaults.conf
+# Then read script details
+source jenkins-rightscripts.d/"$1".conf
+
+# Nicely print account details
+cat <<ACCOUNT_DETAILS
+Rightscale Account Details:
+  Email: $RS_EMAIL
+  AccountId $RS_ACCOUNTID
+ACCOUNT_DETAILS
+
+echo "Rightform Parameters:"
+declare -a MSM_RF_ARGS
+
+# Read from stdin that is an here-doc text at the end of the loop. Fields are:
+#   1. Nice looking name
+#   2. Long option
+#   3. Name of the variable holding the value
+while read NAME OPTION VALUE; do
+    # If there is a variable with the same name as field 3...
+    if [ -n "${!VALUE}" ] ; then
+        # Create an option string with the second field as switch, and the
+        # third field as the name of the variable holding the value. Append the
+        # previously created string to the array of RightForm params.
+        MSM_RF_ARGS[${#MSM_RF_ARGS[*]}]="${OPTION} ${!VALUE}"
+        # Nicely print Rightform param
+        echo "  ${NAME}: ${!VALUE}"
+    fi
+done <<END
+Deployments --deployments MSM_RF_DEPLOYMENTS
+Tags --tags MSM_RF_TAGS
+ImageID --image-id MSM_RF_IMAGE_ID
+JustOne --just-one MSM_RF_JUST_ONE
+END
+
+# Create an array by reading lines from the following here-doc text.
+readarray -t MSM_RF_INPUTS <<END
+MSM_GH_HOST=text:$MSM_GH_HOST
+MSM_GH_REPO=text:$MSM_GH_REPO
+MSM_GH_REPO_REF=text:$MSM_GH_REPO_REF
+MSM_GH_REPO_FILE=text:$MSM_GH_REPO_FILE
+MSM_SCRIPT_INTERPRETER=text:$MSM_SCRIPT_INTERPRETER
+MSM_SCRIPT_USER=text:$MSM_SCRIPT_USER
+MSM_SCRIPT_GROUP=text:$MSM_SCRIPT_GROUP
+END
+
+# If there are rightscript args, append them to the RightForm inputs
+if [ ${#MSM_RF_ARGS[*]} -gt 0 ] ; then
+    MSM_RF_INPUTS[${#MSM_RF_INPUTS[*]}]="MSM_RF_ARGS=$(array "${MSM_RF_ARGS[@]}")"
+fi
+
+MSM_RF_INPUTS="$(join ";" "${MSM_RF_INPUTS[@]}")"
+
+# Call rightform...
